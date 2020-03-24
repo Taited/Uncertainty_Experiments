@@ -22,7 +22,7 @@ def gen_noise(_y):
         print('shape is None')
         return None
     _begin = int(_y.shape[0] * 2/3)
-    _noise = np.random.normal(0, 0.5, size=_y[_begin:-1].shape)
+    _noise = np.random.normal(0, 0.2, size=_y[_begin:-1].shape)
     _y[_begin:-1] = _y[_begin:-1] + _noise
     # _y[_begin:_y.shape[0]-1] = _y[_begin:_y.shape[0]-1] + _noise
     return _y
@@ -58,14 +58,14 @@ def plot_loss(_loss_list, _is_save=False):
 
 class FC(nn.Module):
     def __init__(self, in_dim=1, n_hidden_1=150, n_hidden_2=80,
-                 n_hidden_3=20, out_dim=2):
+                 n_hidden_3=20, out_dim=1):
         super(FC, self).__init__()
         self.layer1 = nn.Linear(in_dim, n_hidden_1, bias=True)
         self.layer2 = nn.Linear(n_hidden_1, n_hidden_2, bias=True)
         self.layer3 = nn.Linear(n_hidden_2, n_hidden_3, bias=True)
-        self.layer4 = nn.Linear(n_hidden_3, out_dim, bias=True)
+        self.layer4 = nn.Linear(n_hidden_3, out_dim)
 
-    def forward(self, x, dp=0.5):
+    def forward(self, x, dp=0.1):
         x = x.view(x.size(0), -1)  # 不加上这句使其变成一维向量，会有维度不匹配的错误
         x = self.layer1(x)
         x = F.dropout(x, p=dp)
@@ -116,60 +116,69 @@ def plot_cal_epistemic(_x_train, _y_train, _x_pre, _y_mean, _y_std, _x_test, _y_
 
 
 def aleatoric_loss_func(_prediction, _label):
-    _loss_list = torch.zeros(_label.shape)
+    # _prediction is a n*m matrix
+    _mean, _std = cal_mean_std_in_column(_prediction)
+    _loss_tensor = torch.zeros(_label.shape)
     for _i in range(len(_label)):
-        _sigma_2 = _prediction[_i, 1] * _prediction[_i, 1]
-        _item_1 = _prediction[_i, 0] - _label[_i]
+        _item_1 = _mean[_i] - _label[_i]
         # 避免出现除以0，而得到Nan
-        _item_2 = torch.exp(torch.log(_sigma_2))
-        _item_3 = _item_1 * _item_1 / (2 * _item_2)
-        _loss_list[_i] = _item_3 + 0.5 * torch.log(_sigma_2)
-    _loss = _loss_list.mean()
+        _item_2 = torch.exp(-1 * torch.log(_std[_i]))
+        if _item_2 == 0:
+            stoper = 1
+        _item_3 = _item_1 * _item_1 * _item_2 * 0.5
+        _loss_tensor[_i] = _item_3 + 0.5 * torch.log(_std[_i])
+    _loss = _loss_tensor.mean()
     return _loss
 
 
+def cal_mean_std_in_column(_tensor):
+    _mean = torch.zeros([_tensor.shape[1]])
+    _std = torch.zeros([_tensor.shape[1]])
+    for _i in range(_tensor.shape[1]):
+        _mean[_i] = _tensor[:, _i].mean().reshape(1)
+        _std[_i] = _tensor[:, _i].std().reshape(1)
+    return _mean, _std
+
+
 if __name__ == '__main__':
+    BATCHES = 100
     x_train, y_train = gen_train(_is_noise=True)
     x_test, y_test = gen_test()
-    # my_plot(x_train, y_train, x_test, y_test)
     x_train = torch.tensor(x_train, dtype=torch.float32, requires_grad=True)
     y_train = torch.tensor(y_train, dtype=torch.float32, requires_grad=True)
     y_train = y_train.view(y_train.size(0), -1)
     net = FC()
-    optimizer = optim.Adam(params=net.parameters(), lr=1e-4, weight_decay=1e-4)
+    optimizer = optim.Adam(params=net.parameters(), lr=0.0001, weight_decay=1e-4)
     loss_func = torch.nn.MSELoss()
     loss_list = []
     # train
     net.train()  # 设置成训练模式，打开dropout
-    for t in range(int(1e3)):
+    for t in range(10001):
         if t:
             loss.backward()  # 将误差返回给模型
             optimizer.step()  # 建模型的数据更新
-        prediction = net(x_train)
-        # loss = loss_func(prediction, y_train)
-        loss = aleatoric_loss_func(prediction, y_train)
-        if loss <= 0.04:  # 早停
-            break
+        predict = torch.zeros([BATCHES, x_train.shape[0]])
+        for batch in range(100):
+            prediction = net(x_train)
+            predict[batch, :] = prediction.reshape([1, prediction.shape[0]])
+        loss = aleatoric_loss_func(predict, y_train)
         loss_list.append(loss)
         if (t % 100) == 0 or t == 0:
             print('loss in iter {}: {}'.format(t, loss))
         optimizer.zero_grad()  # 清空上一步的残余更新参数值
     plot_loss(loss_list, _is_save=True)
 
-    # 计算认知不确定性
-    net.train()
-    T = 1e3
-    prediction_list = []
+    # 计算Aleatoric Uncertainty
     x_test = torch.tensor(x_test, dtype=torch.float32)
-    for t in range(int(T)):
+    predict_tensor = torch.zeros([BATCHES, x_test.shape[0]])
+    for batch in range(int(BATCHES)):
         prediction = net(x_test)
-        prediction_list.append(prediction)
-    prediction_np = tensor_list_to_np(prediction_list)
-    mean, std = cal_epistemic(prediction_np)
+        predict_tensor[batch, :] = prediction.reshape([1, prediction.shape[0]])
+    mean, std = cal_mean_std_in_column(predict_tensor)
 
     # 画图
     plot_cal_epistemic(x_train.detach().numpy(), y_train.detach().numpy(),
-            x_test.detach().numpy(), mean, std,
+            x_test.detach().numpy(), mean.detach().numpy(), std.detach().numpy(),
             x_test.detach().numpy(), y_test)
     # my_plot(x_train.detach().numpy(), y_train.detach().numpy(),
     #         x_test.detach().numpy(), y_prediction.detach().numpy(),
