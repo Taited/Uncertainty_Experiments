@@ -90,17 +90,6 @@ def tensor_list_to_np(_prediction_list):
     return _result
 
 
-def cal_epistemic(_np):
-    _row = _np.shape[0]
-    _col = _np.shape[1]
-    _mean = np.zeros([_col, 1])
-    _std = np.zeros([_col, 1])
-    for _i in range(_col):
-        _mean[_i] = _np[:, _i].mean()
-        _std[_i] = _np[:, _i].std()
-    return _mean, _std
-
-
 def plot_cal_epistemic(_x_train, _y_train, _x_pre, _y_mean, _y_std, _x_test, _y_test):
     plt.figure()
     y_1 = (_y_mean - _y_std).reshape(-1)
@@ -115,6 +104,32 @@ def plot_cal_epistemic(_x_train, _y_train, _x_pre, _y_mean, _y_std, _x_test, _y_
     plt.show()
 
 
+def plot_uncertainty(_x_train, _y_train, _x_pre, _y_mean, _y_std, _y_var, _x_test, _y_test):
+    plt.figure()
+    plt.subplot(1, 2, 1)
+    y_1 = (_y_mean - _y_std).reshape(-1)
+    y_2 = (_y_mean + _y_std).reshape(-1)
+    plt.fill_between(_x_pre, y_1, y_2, color='peachpuff', interpolate=True, label='aleatoric uncertainty')
+    plt.scatter(_x_test, _y_test, color='gold', label='test data')
+    plt.scatter(_x_train, _y_train, label='train data')
+    plt.plot(_x_pre, _y_mean, color='red', label='prediction on test data')
+    plt.title('Aleatoric Uncertainty')
+    plt.legend()
+    plt.grid()
+    plt.subplot(1, 2, 2)
+    y_1 = (_y_mean - _y_var).reshape(-1)
+    y_2 = (_y_mean + _y_var).reshape(-1)
+    plt.fill_between(_x_pre, y_1, y_2, color='peachpuff', interpolate=True, label='epistemic uncertainty')
+    plt.scatter(_x_test, _y_test, color='gold', label='test data')
+    plt.scatter(_x_train, _y_train, label='train data')
+    plt.plot(_x_pre, _y_mean, color='red', label='prediction on test data')
+    plt.title('Epistemic Uncertainty')
+    plt.legend()
+    plt.grid()
+    plt.show()
+    plt.savefig('test.png')
+
+
 def aleatoric_loss_func(_prediction, _label):
     # _prediction is a n*m matrix
     _mean, _std = cal_mean_std_in_column(_prediction)
@@ -122,10 +137,12 @@ def aleatoric_loss_func(_prediction, _label):
     for _i in range(len(_label)):
         _item_1 = _mean[_i] - _label[_i]
         # 避免出现除以0，而得到Nan
-        _item_2 = torch.exp(-1 * torch.log(_std[_i]))
-        if _item_2 == 0:
-            stoper = 1
-        _item_3 = _item_1 * _item_1 * _item_2 * 0.5
+        # _item_2 = torch.exp(torch.log(_std[_i])) + 1e-4
+        if _std[_i] <= 0:
+            _item_2 = _std[_i] + 1e-4
+        else:
+            _item_2 = _std[_i]
+        _item_3 = _item_1 * _item_1 / (2 * _item_2)
         _loss_tensor[_i] = _item_3 + 0.5 * torch.log(_std[_i])
     _loss = _loss_tensor.mean()
     return _loss
@@ -140,6 +157,19 @@ def cal_mean_std_in_column(_tensor):
     return _mean, _std
 
 
+def cal_epistemic(_tensor):
+    _mean, _std = cal_mean_std_in_column(_tensor)
+    _var = torch.zeros(_mean.shape[0])
+    for _i in range(_mean.shape[0]):
+        _item1 = _std[_i] - _mean[_i] * _mean[_i]
+        _item2 = torch.zeros(1)
+        for _t in range(_tensor.shape[0]):
+            _item2 += _tensor[_t, _i] * _tensor[_t, _i]
+        _item2 = _item2 / _tensor.shape[0]
+        _var[_i] = _item1+_item2
+    return _var, _mean, _std
+
+
 if __name__ == '__main__':
     BATCHES = 100
     x_train, y_train = gen_train(_is_noise=True)
@@ -148,12 +178,12 @@ if __name__ == '__main__':
     y_train = torch.tensor(y_train, dtype=torch.float32, requires_grad=True)
     y_train = y_train.view(y_train.size(0), -1)
     net = FC()
-    optimizer = optim.Adam(params=net.parameters(), lr=0.0001, weight_decay=1e-4)
+    optimizer = optim.Adam(params=net.parameters(), lr=0.001, weight_decay=1e-4)
     loss_func = torch.nn.MSELoss()
     loss_list = []
     # train
     net.train()  # 设置成训练模式，打开dropout
-    for t in range(10001):
+    for t in range(101):
         if t:
             loss.backward()  # 将误差返回给模型
             optimizer.step()  # 建模型的数据更新
@@ -162,6 +192,8 @@ if __name__ == '__main__':
             prediction = net(x_train)
             predict[batch, :] = prediction.reshape([1, prediction.shape[0]])
         loss = aleatoric_loss_func(predict, y_train)
+        if torch.isnan(loss):
+            break
         loss_list.append(loss)
         if (t % 100) == 0 or t == 0:
             print('loss in iter {}: {}'.format(t, loss))
@@ -174,11 +206,15 @@ if __name__ == '__main__':
     for batch in range(int(BATCHES)):
         prediction = net(x_test)
         predict_tensor[batch, :] = prediction.reshape([1, prediction.shape[0]])
-    mean, std = cal_mean_std_in_column(predict_tensor)
+    var, mean, std = cal_epistemic(predict_tensor)
+    # mean, std = cal_mean_std_in_column(predict_tensor)
 
     # 画图
+    # plot_uncertainty(x_train.detach().numpy(), y_train.detach().numpy(),
+    #         x_test.detach().numpy(), mean.detach().numpy(), std.detach().numpy(), var.detach().numpy(),
+    #         x_test.detach().numpy(), y_test)
     plot_cal_epistemic(x_train.detach().numpy(), y_train.detach().numpy(),
-            x_test.detach().numpy(), mean.detach().numpy(), std.detach().numpy(),
+            x_test.detach().numpy(), mean.detach().numpy(), var.detach().numpy(),
             x_test.detach().numpy(), y_test)
     # my_plot(x_train.detach().numpy(), y_train.detach().numpy(),
     #         x_test.detach().numpy(), y_prediction.detach().numpy(),
