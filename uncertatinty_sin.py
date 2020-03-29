@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 
 def gen_train(_is_noise=False):
-    _x = np.arange(-5, 5, 0.3)
+    _x = np.arange(-5, 5, 0.01)
     _y = np.sin(_x)
     if _is_noise:
         _y = gen_noise(_y)
@@ -21,27 +21,17 @@ def gen_noise(_y):
     if _y is None:
         print('shape is None')
         return None
-    _begin = int(_y.shape[0] * 2/3)
-    _noise = np.random.normal(0, 0.2, size=_y[_begin:-1].shape)
+    _begin = int(_y.shape[0] * 2 / 3)
+    _noise = np.random.normal(0, 0.5, size=_y[_begin:-1].shape)
     _y[_begin:-1] = _y[_begin:-1] + _noise
     # _y[_begin:_y.shape[0]-1] = _y[_begin:_y.shape[0]-1] + _noise
     return _y
 
 
 def gen_test():
-    _x = np.arange(-10, 10, 0.2)
+    _x = np.arange(-10, 10, 0.4)
     _y = np.sin(_x)
     return _x, _y
-
-
-def my_plot(_x_train, _y_train, _x_pre, _y_pre, _x_test, _y_test):
-    plt.figure()
-    plt.scatter(_x_train, _y_train, label='train data')
-    plt.plot(_x_pre, _y_pre, label='prediction', color='red')
-    plt.plot(_x_test, _y_test, color='coral', label='true test')
-    plt.legend()
-    plt.grid()
-    plt.show()
 
 
 def plot_loss(_loss_list, _is_save=False):
@@ -90,41 +80,27 @@ def tensor_list_to_np(_prediction_list):
     return _result
 
 
-def plot_cal_epistemic(_x_train, _y_train, _x_pre, _y_mean, _y_std, _x_test, _y_test):
-    plt.figure()
-    y_1 = (_y_mean - _y_std).reshape(-1)
-    y_2 = (_y_mean + _y_std).reshape(-1)
-    plt.fill_between(_x_pre, y_1, y_2, color='peachpuff', interpolate=True, label='epistemic uncertainty')
-    plt.scatter(_x_test, _y_test, color='gold', label='test data')
-    plt.scatter(_x_train, _y_train, label='train data')
-    plt.plot(_x_pre, _y_mean, color='red', label='prediction on test data')
-    plt.title('Epistemic Uncertainty')
-    plt.legend()
-    plt.grid()
-    plt.show()
-
-
 def plot_uncertainty(_x_train, _y_train, _x_pre, _y_mean, _y_std, _y_var, _x_test, _y_test):
     plt.figure()
-    plt.subplot(1, 2, 1)
+    plt.subplot(2, 1, 1)
     y_1 = (_y_mean - _y_std).reshape(-1)
     y_2 = (_y_mean + _y_std).reshape(-1)
-    plt.fill_between(_x_pre, y_1, y_2, color='peachpuff', interpolate=True, label='aleatoric uncertainty')
     plt.scatter(_x_test, _y_test, color='gold', label='test data')
+    plt.fill_between(_x_pre, y_1, y_2, color='peachpuff', interpolate=True, label='aleatoric uncertainty')
     plt.scatter(_x_train, _y_train, label='train data')
     plt.plot(_x_pre, _y_mean, color='red', label='prediction on test data')
     plt.title('Aleatoric Uncertainty')
-    plt.legend()
+    # plt.legend()
     plt.grid()
-    plt.subplot(1, 2, 2)
+    plt.subplot(2, 1, 2)
     y_1 = (_y_mean - _y_var).reshape(-1)
     y_2 = (_y_mean + _y_var).reshape(-1)
-    plt.fill_between(_x_pre, y_1, y_2, color='peachpuff', interpolate=True, label='epistemic uncertainty')
     plt.scatter(_x_test, _y_test, color='gold', label='test data')
+    plt.fill_between(_x_pre, y_1, y_2, color='peachpuff', interpolate=True, label='epistemic uncertainty')
     plt.scatter(_x_train, _y_train, label='train data')
     plt.plot(_x_pre, _y_mean, color='red', label='prediction on test data')
     plt.title('Epistemic Uncertainty')
-    plt.legend()
+    # plt.legend()
     plt.grid()
     plt.show()
     plt.savefig('test.png')
@@ -139,11 +115,10 @@ def aleatoric_loss_func(_prediction, _label):
         # 避免出现除以0，而得到Nan
         # _item_2 = torch.exp(torch.log(_std[_i])) + 1e-4
         if _std[_i] <= 0:
-            _item_2 = _std[_i] + 1e-4
+            _item_2 = _item_1 * _item_1 / (2 * 1e-4)
         else:
-            _item_2 = _std[_i]
-        _item_3 = _item_1 * _item_1 / (2 * _item_2)
-        _loss_tensor[_i] = _item_3 + 0.5 * torch.log(_std[_i])
+            _item_2 = _item_1 * _item_1 / (2 * _std[_i])
+        _loss_tensor[_i] = _item_2 + 0.5 * torch.log(_std[_i])
     _loss = _loss_tensor.mean()
     return _loss
 
@@ -166,12 +141,12 @@ def cal_epistemic(_tensor):
         for _t in range(_tensor.shape[0]):
             _item2 += _tensor[_t, _i] * _tensor[_t, _i]
         _item2 = _item2 / _tensor.shape[0]
-        _var[_i] = _item1+_item2
+        _var[_i] = _item1 + _item2
     return _var, _mean, _std
 
 
 if __name__ == '__main__':
-    BATCHES = 100
+    BATCHES = 50
     x_train, y_train = gen_train(_is_noise=True)
     x_test, y_test = gen_test()
     x_train = torch.tensor(x_train, dtype=torch.float32, requires_grad=True)
@@ -183,12 +158,12 @@ if __name__ == '__main__':
     loss_list = []
     # train
     net.train()  # 设置成训练模式，打开dropout
-    for t in range(101):
+    for t in range(401):
         if t:
             loss.backward()  # 将误差返回给模型
             optimizer.step()  # 建模型的数据更新
         predict = torch.zeros([BATCHES, x_train.shape[0]])
-        for batch in range(100):
+        for batch in range(BATCHES):
             prediction = net(x_train)
             predict[batch, :] = prediction.reshape([1, prediction.shape[0]])
         loss = aleatoric_loss_func(predict, y_train)
@@ -210,12 +185,13 @@ if __name__ == '__main__':
     # mean, std = cal_mean_std_in_column(predict_tensor)
 
     # 画图
-    # plot_uncertainty(x_train.detach().numpy(), y_train.detach().numpy(),
-    #         x_test.detach().numpy(), mean.detach().numpy(), std.detach().numpy(), var.detach().numpy(),
+    plot_uncertainty(x_train.detach().numpy(), y_train.detach().numpy(),
+                     x_test.detach().numpy(), mean.detach().numpy(),
+                     std.detach().numpy(), var.detach().numpy(),
+                     x_test.detach().numpy(), y_test)
+    # plot_cal_epistemic(x_train.detach().numpy(), y_train.detach().numpy(),
+    #         x_test.detach().numpy(), mean.detach().numpy(), var.detach().numpy(),
     #         x_test.detach().numpy(), y_test)
-    plot_cal_epistemic(x_train.detach().numpy(), y_train.detach().numpy(),
-            x_test.detach().numpy(), mean.detach().numpy(), var.detach().numpy(),
-            x_test.detach().numpy(), y_test)
     # my_plot(x_train.detach().numpy(), y_train.detach().numpy(),
     #         x_test.detach().numpy(), y_prediction.detach().numpy(),
     #         x_test.detach().numpy(), y_test)
