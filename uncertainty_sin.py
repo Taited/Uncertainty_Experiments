@@ -9,11 +9,13 @@ from torch import optim
 import matplotlib.pyplot as plt
 
 
-def gen_train(_is_noise=False, step=0.1):
-    _x = np.arange(-5, 5, step)
+def gen_train(_is_noise=False, _step=0.1):
+    _x = np.arange(-5, 5, _step)
     _y = np.sin(_x)
     if _is_noise:
         _y = gen_noise(_y)
+    _x = torch.tensor(_x, dtype=torch.float32, requires_grad=True)
+    _y = torch.tensor(_y, dtype=torch.float32, requires_grad=True)
     return _x, _y
 
 
@@ -28,17 +30,19 @@ def gen_noise(_y):
     return _y
 
 
-def gen_test(step=0.4):
-    _x = np.arange(-10, 10, step)
+def gen_test(_step=0.4):
+    _x = np.arange(-10, 10, _step)
     _y = np.sin(_x)
+    _x = torch.tensor(_x, dtype=torch.float32)
+    _y = torch.tensor(_y, dtype=torch.float32)
     return _x, _y
 
 
 def plot_loss(_loss_list, _is_save=False):
-    x = np.arange(len(_loss_list))
-    y = np.array(_loss_list)
+    _x = np.arange(len(_loss_list))
+    _y = np.array(_loss_list)
     plt.figure()
-    plt.plot(x, y, label='loss')
+    plt.plot(_x, _y, label='loss')
     plt.grid()
     plt.legend()
     plt.show()
@@ -87,19 +91,64 @@ class FC(nn.Module):
         self.layer3 = nn.Linear(n_hidden_2, n_hidden_3, bias=True)
         self.layer4 = nn.Linear(n_hidden_3, out_dim)
 
-    def forward(self, x, dp=0.1):
-        x = x.view(x.size(0), -1)  # 不加上这句使其变成一维向量，会有维度不匹配的错误
-        x = self.layer1(x)
-        x = F.dropout(x, p=dp)
-        x = F.relu(x)
-        x = self.layer2(x)
-        x = F.dropout(x, p=dp)
-        x = F.relu(x)
-        x = self.layer3(x)
-        x = F.dropout(x, p=dp)
-        x = F.relu(x)
-        x = self.layer4(x)
-        return x
+    def forward(self, _x, dp=0.1):
+        _x = _x.view(_x.size(0), -1)  # 不加上这句使其变成一维向量，会有维度不匹配的错误
+        _x = self.layer1(_x)
+        _x = F.dropout(_x, p=dp)
+        _x = F.relu(_x)
+        _x = self.layer2(_x)
+        _x = F.dropout(_x, p=dp)
+        _x = F.relu(_x)
+        _x = self.layer3(_x)
+        _x = F.dropout(_x, p=dp)
+        _x = F.relu(_x)
+        _x = self.layer4(_x)
+        return _x
+
+
+class NN(nn.Module):
+    def __init__(self, input_size=1, hidden_size=64, output_size=1, p=0.9):
+        super(NN, self).__init__()
+        self.p = p
+        self.fc1 = nn.Sequential(nn.Linear(input_size, hidden_size),
+                                 nn.Dropout(p=1 - p),
+                                 nn.ReLU(),
+                                 nn.Linear(hidden_size, hidden_size),
+                                 nn.Dropout(p=1 - p),
+                                 nn.ReLU(),
+                                 nn.Linear(hidden_size, hidden_size),
+                                 nn.Dropout(p=1 - p),
+                                 nn.ReLU(),
+                                 nn.Linear(hidden_size, hidden_size),
+                                 nn.Dropout(p=1 - p),
+                                 nn.ReLU(),
+                                 nn.Linear(hidden_size, hidden_size),
+                                 nn.Dropout(p=1 - p),
+                                 nn.ReLU(),
+                                 nn.Linear(hidden_size, hidden_size),
+                                 nn.Dropout(p=1 - p),
+                                 nn.ReLU(),
+                                 nn.Linear(hidden_size, hidden_size),
+                                 nn.Dropout(p=1 - p),
+                                 nn.ReLU())
+
+        self.out = nn.Linear(hidden_size, output_size)
+        self.var_out = nn.Sequential(nn.Linear(hidden_size, 1))
+
+    def forward(self, _x):
+        features = self.fc1(_x)
+        _output = self.out(features)
+        _log_var = self.var_out(features)
+        return _output, _log_var
+
+
+class AleatoricLoss(nn.Module):
+    def __init__(self):
+        super(AleatoricLoss, self).__init__()
+
+    def forward(self, _output, _gt, _log_variance):
+        _loss = torch.sum(0.5 * (torch.exp(-1 * _log_variance)) * (_gt - _output) ** 2 + 0.5 * _log_variance)
+        return _loss
 
 
 def aleatoric_loss_func(_prediction, _label):
@@ -144,54 +193,95 @@ def cal_epistemic(_tensor):
     return torch.sqrt(_var), _mean, _std
 
 
+# def train_origin():
+#
+#
+#     while loss >= -0.8:
+#
+#         predict = torch.zeros([BATCHES, x_train.shape[0]])
+#         # 进行batches次dropout
+#         for batch in range(BATCHES):
+#             prediction = net(x_train)
+#             predict[batch, :] = prediction.reshape([1, prediction.shape[0]])
+#         loss = aleatoric_loss_func(predict, y_train)
+#         if torch.isnan(loss) or loss <= -0.8:  # -0.8是为了早停
+#             break
+#         loss_list.append(loss)
+#         if (t % 50) == 0 or t == 0:
+#             print('loss in iter {}: {}'.format(t, loss))
+#         optimizer.zero_grad()  # 清空上一步的残余更新参数值
+#         t += 1
+#     plot_loss(loss_list, _is_save=True)
+#
+#     # 计算Aleatoric Uncertainty
+#     x_test = torch.tensor(x_test, dtype=torch.float32)
+#     predict_tensor = torch.zeros([BATCHES, x_test.shape[0]])
+#     for batch in range(int(BATCHES)):
+#         prediction = net(x_test)
+#         predict_tensor[batch, :] = prediction.reshape([1, prediction.shape[0]])
+#     var, mean, std = cal_epistemic(predict_tensor)
+
+
+def MC_samples(_net, _x_data):
+    T = 64
+    weight_decay = 1e-4
+    output_list = []
+    aleatoric_uncertainty_list = []
+    _l = 10
+    for _id in range(len(_x_data)):
+        _x = _x_data[_id].reshape(1)
+        output_list.append([])
+        aleatoric_uncertainty_list.append([])
+        for t in range(T):
+            _output, _log_var = net(_x)
+            _output = _output.item()
+            _log_var = _log_var.item()
+            output_list[_id].append(_output)
+            aleatoric_uncertainty_list[_id].append(_log_var)
+    _output = np.array(output_list)
+    _aleatoric_uncertainty = np.array(aleatoric_uncertainty_list)
+    means = _output.mean(axis=1)
+    aleatoric_uncertainty_means = _aleatoric_uncertainty.mean(axis=1)
+    variances = np.var(_output, axis=1)
+    tau = _l ** 2 * net.p / (2 * len(_x_data) * weight_decay)
+    variances += tau**-1
+    return means, aleatoric_uncertainty_means, variances
+
+
 if __name__ == '__main__':
-    BATCHES = 50  # int
-    step = 0.01
+    EPOCH = int(1e3)  # int
+    step = 0.3
     # 生成训练数据
-    x_train, y_train = gen_train(_is_noise=True, step=step)
-    x_test, y_test = gen_test(step=step)
-    x_train = torch.tensor(x_train, dtype=torch.float32, requires_grad=True)
-    y_train = torch.tensor(y_train, dtype=torch.float32, requires_grad=True)
-    y_train = y_train.view(y_train.size(0), -1)
+    x_train, y_train = gen_train(_is_noise=True, _step=step)
+    x_test, y_test = gen_test(_step=step)
+    # x_train = torch.tensor(x_train, dtype=torch.float32, requires_grad=True)
+    # y_train = torch.tensor(y_train, dtype=torch.float32, requires_grad=True)
+
     # 网络初始化
-    net = FC()
+    net = NN()
     optimizer = optim.Adam(params=net.parameters(), lr=0.001, weight_decay=1e-4)
-    loss_func = torch.nn.MSELoss()
+    loss_func = AleatoricLoss()
     loss_list = []
     # train
     net.train()  # 设置成训练模式，打开dropout
-    # for t in range(401):
-    t = 0
-    loss = 0
-    while loss >= -0.8:
-        if t:
+    for _ in range(EPOCH):
+        loss_in_turn = torch.zeros(1)
+        for id in range(len(x_train)):
+            x = x_train[id].reshape(1)
+            y = y_train[id].reshape(1)
+            net.zero_grad()
+            output, log_var = net(x)
+            loss = loss_func(output, y, log_var)
             loss.backward()  # 将误差返回给模型
             optimizer.step()  # 建模型的数据更新
-        predict = torch.zeros([BATCHES, x_train.shape[0]])
-        # 进行batches次dropout
-        for batch in range(BATCHES):
-            prediction = net(x_train)
-            predict[batch, :] = prediction.reshape([1, prediction.shape[0]])
-        loss = aleatoric_loss_func(predict, y_train)
-        if torch.isnan(loss) or loss <= -0.8:  # -0.8是为了早停
-            break
-        loss_list.append(loss)
-        if (t % 50) == 0 or t == 0:
-            print('loss in iter {}: {}'.format(t, loss))
-        optimizer.zero_grad()  # 清空上一步的残余更新参数值
-        t += 1
-    plot_loss(loss_list, _is_save=True)
-
-    # 计算Aleatoric Uncertainty
-    x_test = torch.tensor(x_test, dtype=torch.float32)
-    predict_tensor = torch.zeros([BATCHES, x_test.shape[0]])
-    for batch in range(int(BATCHES)):
-        prediction = net(x_test)
-        predict_tensor[batch, :] = prediction.reshape([1, prediction.shape[0]])
-    var, mean, std = cal_epistemic(predict_tensor)
-
+            loss_in_turn += loss
+        loss_in_turn /= len(x_train)
+        loss_list.append(loss_in_turn.detach().numpy())
+        if (_ % 50) == 0 or _ == 0 or _ == EPOCH-1:
+            print('Loss in iter {}: {}'.format(_, loss_in_turn.detach().numpy()))
+    plot_loss(loss_list)
+    mean, aleatoric, variances = MC_samples(net, x_test)
     # 画图
     plot_uncertainty(x_train.detach().numpy(), y_train.detach().numpy(),
-                     x_test.detach().numpy(), mean.detach().numpy(),
-                     std.detach().numpy(), var.detach().numpy(),
-                     x_test.detach().numpy(), y_test, step)
+                     x_test.detach().numpy(), mean, aleatoric, variances,
+                     x_test.detach().numpy(), y_test.detach().numpy(), step)
