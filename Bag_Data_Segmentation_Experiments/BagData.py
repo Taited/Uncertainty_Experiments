@@ -1,13 +1,11 @@
 import os
-
-import torch
-import torch.nn as nn
-from torch.utils.data import Dataset, random_split
-from torchvision import transforms
-from PIL import Image
-import os, os.path
+import os.path
 
 import cv2
+import torch
+from torch.utils.data import Dataset, random_split
+from torchvision import transforms
+
 from onehot import onehot
 
 transform = transforms.Compose([

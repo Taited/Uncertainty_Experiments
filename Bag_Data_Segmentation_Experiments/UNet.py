@@ -57,6 +57,6 @@ class UNet(nn.Module):
 
         x = self.dconv_up1(x)
         out = self.conv_last(x)
-        # out = torch.sigmoid(out)
-        out = torch.softmax(out)
+        out = torch.sigmoid(out)
+        # out = torch.softmax(out)
         return out

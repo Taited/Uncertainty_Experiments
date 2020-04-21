@@ -9,7 +9,7 @@ import visdom
 from torch.utils.data import DataLoader
 from BagData import test_dataset, train_dataset
 from FCN import VGGNet, UNet
-from DiceLoss import DiceLoss, MeanAccuracy
+from LossFunction import DiceLoss, MeanAccuracy
 from UNet import UNet as unet
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -18,13 +18,14 @@ import cv2
 from time import time
 
 
+# 使用预训练好的VGG作为UNet的backbone
 def train(epo_num=50, show_vgg_params=False, is_save=False):
     vis = visdom.Visdom()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     BATCH_SIZE = 4
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8)
-    test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8)
+    train_data_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8)
+    test_data_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8)
 
     vgg_model = VGGNet(requires_grad=True, show_params=show_vgg_params)
     fcn_model = UNet(pretrained_net=vgg_model, n_class=2)
@@ -42,7 +43,7 @@ def train(epo_num=50, show_vgg_params=False, is_save=False):
 
         train_loss = 0
         fcn_model.train()
-        for index, (bag, bag_msk, image_id) in enumerate(train_dataloader):
+        for index, (bag, bag_msk, image_id) in enumerate(train_data_loader):
             # bag.shape is torch.Size([4, 3, 160, 160])
             # bag_msk.shape is torch.Size([4, 2, 160, 160])
 
@@ -67,7 +68,7 @@ def train(epo_num=50, show_vgg_params=False, is_save=False):
             bag_msk_np = np.argmin(bag_msk_np, axis=1)
 
             if np.mod(index, 15) == 0:
-                print('epoch {}, {}/{},train loss is {}'.format(epo, index, len(train_dataloader), iter_loss))
+                print('epoch {}, {}/{},train loss is {}'.format(epo, index, len(train_data_loader), iter_loss))
                 # vis.close()
                 vis.images(output_np[:, None, :, :], win='train_pred', opts=dict(title='train prediction'))
                 vis.images(bag_msk_np[:, None, :, :], win='train_label', opts=dict(title='label'))
@@ -76,7 +77,7 @@ def train(epo_num=50, show_vgg_params=False, is_save=False):
         test_loss = 0
         fcn_model.eval()
         with torch.no_grad():
-            for index, (bag, bag_msk) in enumerate(test_dataloader):
+            for index, (bag, bag_msk) in enumerate(test_data_loader):
 
                 bag = bag.to(device)
                 bag_msk = bag_msk.to(device)
@@ -110,24 +111,14 @@ def train(epo_num=50, show_vgg_params=False, is_save=False):
         prev_time = cur_time
 
         print('epoch train loss = %f, epoch test IOU = %f, %s'
-              % (train_loss / len(train_dataloader), test_loss / len(test_dataloader), time_str))
+              % (train_loss / len(train_data_loader), test_loss / len(test_data_loader), time_str))
 
         if np.mod(epo, 5) == 0 and is_save:
             torch.save(fcn_model, 'checkpoints/fcn_model_{}.pt'.format(epo))
             print('saveing checkpoints/fcn_model_{}.pt'.format(epo))
 
 
-def _tensor_to_heat_map(_image_tensor):
-    # 先将输入的图片拆开
-    _result = _image_tensor[0, :, :].reshape(_image_tensor.shape[1:3])
-    sns.set()
-    ax = sns.heatmap(_result.detach().numpy(), cbar=False,
-                     xticklabels=[], yticklabels=[])
-    plt.savefig('./figure/uncertainty.png')
-    _image = cv2.imread('./figure/uncertainty.png')
-    return _image
-
-
+# 带有Uncertainty的训练函数，不使用预训练好的VGG
 def train_uncertainty(epo_num=50, is_save=False):
     vis = visdom.Visdom()
 
@@ -239,14 +230,7 @@ def train_uncertainty(epo_num=50, is_save=False):
             print('saveing checkpoints/bce_loss_{}.pt'.format(epo))
 
 
-def load_model(_model='bce_loss_{}.pt'):
-    PATH = './checkpoints/' + _model.format(85)
-    # model = unet(n_class=2)
-    model = torch.load(PATH)
-    # model.load_state_dict(torch.load(PATH))
-    return model
-
-
+# 通过加载预训练好的模型来进行评估，并进行uncertainty估计和矫正
 def model_test(_model='bce_loss_{}.pt', _is_correct=False):
     BATCH_SIZE = 1
     T = 10
@@ -324,6 +308,7 @@ def model_test(_model='bce_loss_{}.pt', _is_correct=False):
            _train_uncertainty_loss, _test_uncertainty_loss
 
 
+# 通过MC Dropout得到不确定性
 def monte_carlo_sample(_net, _input, _t: int, _device):
     # sample _t times
     with torch.no_grad():
@@ -336,6 +321,12 @@ def monte_carlo_sample(_net, _input, _t: int, _device):
     _mean = uncertainty_result.mean(dim=0)
     _std = uncertainty_result.std(dim=0)
     return _mean, _std
+
+
+def load_model(_model='bce_loss_{}.pt'):
+    PATH = './checkpoints/' + _model.format(85)
+    model = torch.load(PATH)
+    return model
 
 
 def data_box_plot(_tensor_list, _name='Train Dataset'):
@@ -411,6 +402,17 @@ def select_uncertainty(_mean, _std, _mask, _list, _criterion):
     return _list
 
 
+def _tensor_to_heat_map(_image_tensor):
+    # 先将输入的图片拆开
+    _result = _image_tensor[0, :, :].reshape(_image_tensor.shape[1:3])
+    sns.set()
+    ax = sns.heatmap(_result.detach().numpy(), cbar=False,
+                     xticklabels=[], yticklabels=[])
+    plt.savefig('./figure/uncertainty.png')
+    _image = cv2.imread('./figure/uncertainty.png')
+    return _image
+
+
 def plot_distribution(_train_height, _test_height, _name='my_picture'):
     my_dict = {'0~0.1': 0, '0.1~0.15': 0, '0.15~0.2': 0, '0.2~0.25': 0, '0.25~0.3': 0,
                '0.3~0.35': 0, '0.35~0.4': 0, '0.4~0.45': 0, '0.45~0.5': 0, '0.5~1': 0}
@@ -436,9 +438,11 @@ def plot_distribution(_train_height, _test_height, _name='my_picture'):
 
 if __name__ == "__main__":
     begin_time = time()
-    # train_ensemble(epo_num=100, show_vgg_params=False, ensemble_num=1)
+
+    # 训练的函数
     # train(epo_num=35, show_vgg_params=False)
     # train_uncertainty(epo_num=100, is_save=True)
+
     # 模型测试
     train_prediction_list, train_std_list, test_prediction_list, test_std_list, \
         train_accuracy_before_list, train_accuracy_after_list, test_accuracy_before_list, test_accuracy_after_list, \
