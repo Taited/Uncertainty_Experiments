@@ -1,0 +1,6 @@
+*.idea
+*.jpg
+*.pt
+*__pycache__
+*assets
+!bce_loss_85.pt
