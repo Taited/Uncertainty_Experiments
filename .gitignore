@@ -1,5 +1,4 @@
 *.idea
-*.jpg
 *.pt
 *__pycache__
 *assets
